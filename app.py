@@ -2,113 +2,95 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# 1. Configuración de la página (Debe ir al principio)
-st.set_page_config(page_title="Dashboard de Inventario", layout="wide", page_icon="📊")
+# 1. Configuración base
+st.set_page_config(page_title="Dashboard Profesional Almacén", layout="wide", initial_sidebar_state="collapsed")
 
-# 2. Configuración de la fuente de datos (URL CORREGIDA)
+# Estilo para fondo oscuro como el de tu imagen
+st.markdown("<style>min-height: 100vh; background-color: #0e1117;</style>", unsafe_allow_html=True)
+
 SHEET_ID = "18VER3KDvbMIIRXn76dsPqwlQWxAanulQCnDMWw54VDQ"
-# La URL debe incluir /spreadsheets/d/ para que funcione
-URL = f"https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv"
+URL = f"https://google.com{SHEET_ID}/export?format=csv"
 
-@st.cache_data(ttl=600)
-def cargar_datos():
-    # Leer el CSV desde Google Sheets
+@st.cache_data(ttl=300)
+def cargar_datos_limpios():
     df = pd.read_csv(URL)
     
-    # Limpiar nombres de columnas: quitar espacios y minúsculas
+    # Limpiamos nombres de columnas (quitamos espacios y pasamos a minúsculas)
     df.columns = [c.strip().lower() for c in df.columns]
     
-    # Rellenar celdas vacías para evitar errores en gráficos
+    # REGLA DE ESPACIOS VACÍOS: Llenar con N/A
     df = df.fillna('N/A')
     
-    # Limpiar columnas numéricas (convertir a 0 si hay error o está vacío)
-    # Ajusté los nombres para que coincidan con lo que suele haber en un Sheet
-    columnas_num = ['precio', 'costo', 'salida pz', 'stock']
-    for col in columnas_num:
+    # LIMPIEZA DE NÚMEROS (Para que las métricas no den $0.00)
+    # Esta función quita puntos de miles que confunden a Python
+    def limpiar_numero(valor):
+        if isinstance(valor, str):
+            # Si el número tiene más de un punto (ej. 1.089.731), los quitamos todos
+            if valor.count('.') > 1:
+                valor = valor.replace('.', '')
+            else:
+                valor = valor.replace(',', '')
+        return pd.to_numeric(valor, errors='coerce')
+
+    # Aplicamos la limpieza a las columnas clave
+    columnas_valor = ['precio', 'costo', 'salida pz', 'stock']
+    for col in columnas_valor:
         if col in df.columns:
-            # Quitamos símbolos de moneda o comas si existen antes de convertir
-            if df[col].dtype == 'object':
-                df[col] = df[col].str.replace('$', '').str.replace(',', '')
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            df[col] = df[col].apply(limpiar_numero).fillna(0)
             
-    # Limpiar espacios en blanco en textos
-    columnas_texto = ['proyecto', 'descripcion', 'proveedor', 'recibio']
-    for col in columnas_texto:
-        if col in df.columns:
-            df[col] = df[col].astype(str).str.strip()
-            
-    # Convertir fecha de forma segura
-    if 'fecha' in df.columns:
-        df['fecha'] = pd.to_datetime(df['fecha'], dayfirst=True, errors='coerce')
-        
     return df
 
-# --- INTERFAZ DEL DASHBOARD ---
-st.title("📊 Panel de Control de Almacén")
-st.markdown("---")
-
 try:
-    data = cargar_datos()
+    df = cargar_datos_limpios()
 
-    # MÉTRICAS PRINCIPALES (Usando nombres de columnas limpios)
+    # --- MÉTRICAS SUPERIORES ---
     m1, m2, m3, m4 = st.columns(4)
-    
-    # Verificamos que las columnas existan antes de calcular
-    costo_total = data['costo'].sum() if 'costo' in data.columns else 0
-    salidas = data['salida pz'].sum() if 'salida pz' in data.columns else 0
-    stock_total = data['stock'].sum() if 'stock' in data.columns else 0
-    prov_count = data['proveedor'].nunique() if 'proveedor' in data.columns else 0
-
+    # Usamos los nombres exactos de tus columnas
     with m1:
-        st.metric("Gasto Total", f"${costo_total:,.2f}")
+        total_gasto = df['costo'].sum()
+        st.metric("Gasto Total", f"${total_gasto:,.2f}")
     with m2:
-        st.metric("Piezas Entregadas", f"{int(salidas):,}")
+        total_pz = df['salida pz'].sum()
+        st.metric("Piezas Entregadas", f"{int(total_pz):,}")
     with m3:
-        st.metric("Ítems en Stock", f"{int(stock_total):,}")
+        total_stock = df['stock'].sum()
+        st.metric("Items en Stock", f"{int(total_stock):,}")
     with m4:
-        st.metric("Proveedores", prov_count)
+        total_prov = df['proveedor'].nunique()
+        st.metric("Proveedores", total_prov)
 
     st.markdown("---")
 
-    # GRÁFICOS
-    col_izq, col_der = st.columns(2)
+    # --- GRÁFICOS ---
+    col1, col2 = st.columns(2)
 
-    with col_izq:
+    with col1:
         st.subheader("💰 Distribución de Costos")
-        if 'proveedor' in data.columns and 'descripcion' in data.columns:
-            fig_sun = px.sunburst(data, path=['proveedor', 'descripcion'], values='costo',
-                                  color='costo', color_continuous_scale='Blues')
-            st.plotly_chart(fig_sun, use_container_width=True)
-        else:
-            st.info("Faltan columnas 'proveedor' o 'descripcion' para el gráfico.")
+        # Filtramos N/A para que el gráfico sea limpio
+        df_plot = df[df['proveedor'] != 'N/A']
+        fig_costo = px.pie(df_plot, values='costo', names='proveedor', hole=0.4, 
+                           color_discrete_sequence=px.colors.qualitative.Dark24)
+        st.plotly_chart(fig_costo, use_container_width=True)
 
-    with col_der:
+    with col2:
         st.subheader("🏗️ Consumo por Proyecto")
-        if 'proyecto' in data.columns:
-            proy_data = data.groupby('proyecto')['costo'].sum().reset_index()
-            fig_bar = px.bar(proy_data, x='proyecto', y='costo', color='costo', 
-                             text_auto='.2s', color_continuous_scale='Viridis')
-            st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.info("Falta la columna 'proyecto' para el gráfico.")
+        # Agrupamos por proyecto y sumamos costo
+        proy_df = df.groupby('proyecto')['costo'].sum().reset_index()
+        fig_proy = px.bar(proy_df, x='proyecto', y='costo', color='costo',
+                          text_auto='.2s', color_continuous_scale='YlGnBu')
+        st.plotly_chart(fig_proy, use_container_width=True)
 
-    # TABLA DE DATOS
+    # --- DETALLE DE MOVIMIENTOS ---
     st.subheader("📋 Detalle de Movimientos")
-    busqueda = st.text_input("🔍 Buscar producto por descripción:")
+    busqueda = st.text_input("🔍 Buscar producto por descripción", "")
     
-    if busqueda and 'descripcion' in data.columns:
-        df_mostrar = data[data['descripcion'].str.contains(busqueda, case=False)]
+    if busqueda:
+        df_final = df[df['descripcion'].str.contains(busqueda, case=False, na=False)]
     else:
-        df_mostrar = data
-        
-    st.dataframe(df_mostrar, use_container_width=True)
+        df_final = df
+
+    st.dataframe(df_final, use_container_width=True)
 
 except Exception as e:
-    st.error("🚨 Error crítico al cargar los datos.")
-    st.info("Asegúrate de que en Google Sheets hayas ido a 'Compartir' -> 'Cualquier persona con el enlace' -> 'Lector'.")
-    st.write(f"**Detalle técnico:** {e}")
-
-# Botón de refresco en la barra lateral
-if st.sidebar.button('🔄 Forzar Actualización'):
-    st.cache_data.clear()
-    st.rerun()
+    st.error(f"Error al procesar los datos: {e}")
+    st.info("Asegúrate de que las columnas en tu Excel se llamen exactamente: Proyecto, Descripcion, Proveedor, Precio, Salida pz, Costo, Stock, Fecha, Recibio")
